@@ -8,10 +8,44 @@ See [Banyan documentation](https://docs.banyansecurity.io/docs/feature-guides/ma
 
 ## ⚠️ Attention
 
-This repo contains a modified version of the Vanilla CSE (Cloud Secure Edge | formerly Banyan Security) Installation PowerShell script. Whilst the Vanilla version developed by SonicWall, Inc. is included directly below, the versions of the script within the _device_manager/windows_mod_ directory are intended for deployments where the endpoints are NOT directly joined to EntraID. This refers to Hybrid deployments, where endpoints are: **1** On-Premise AD DS Joined + Intune Managed, or **2** On-Premise AD DS Joined & On-Premise Managed.
+This repo contains a modified version of the Vanilla CSE (Cloud Secure Edge | formerly Banyan Security) Installation PowerShell script. Whilst the Vanilla version developed by SonicWall, Inc. is included directly below, the versions of the script within the _device_manager/windows_mod_ directory are intended for deployments where the endpoints are NOT directly joined to EntraID. This refers to Hybrid deployments, where endpoints are: <br>
+<br>
+**1.** On-Premise AD DS Joined + Intune Managed, OR<br>
+**2.** On-Premise AD DS Joined & On-Premise Managed.
 
-* If your organization has a mix of devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_](device_manager/windows_mod/EntraJoined/banyan-windows-intune_with_AD_search_with-Entra-Join.ps1)
-* If your organziation's endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_](device_manager/windows_mod/noEntraJoined/banyan-windows-intune_with_AD_search-without-Entra-Join.ps1)
+### Script Selection
+
+* If your organization has a mix of Windows devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_](device_manager/windows_mod/EntraJoined/banyan-windows-intune_with_AD_search_with-Entra-Join.ps1)
+* If your organziation's Windows endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_](device_manager/windows_mod/noEntraJoined/banyan-windows-intune_with_AD_search-without-Entra-Join.ps1)
+
+<br>
+
+### FAQ(s)
+
+<details>
+  <summary><strong>What's different between the modified Windows script(s) and the Vanilla script?</strong></summary>
+<br>The original version of the CSE installation script for Windows devices was primarily intended for Intune managed endpoints that are also joined to EntraID. Whilst it is still possible to use that script for endpoints that are not joined to EntraID, as presently written, it will only work if you use the STAGED USER, alternative deployment scenario described in the [CSE%20Documentation](https://docs.banyansecurity.io/docs/manage-users-and-devices/device-managers/distribute-desktopapp/#staged-user-and-zero-touch-installation). This can lead to an undesriable behaviour for some organizations where each of their Windows endpoints known to CSE via the script device registration process are associated to a placeholder user in the CSE Command Center, shown as _Staged User_.
+
+The modified version of the script remedies this by searching for the user's identity from other sources.<br><br>
+</details>
+
+
+<details>
+  <summary><strong>How is the user's identity determined in the modified CSE installation script?</strong></summary>
+<br>The modified scripts attempt to use a different registry key than is used in the vanilla version. The registry key should be available in any Windows machine that is joined to an on-premise AD DS deployment.
+
+The script will both, fetch, and compare the identity retreived from the registry against the AD DS directory. In the event the identity matches, the determined identity, the user's UPN (User Principal Name) will be used to register the endpoint with CSE. For this to work correctly, the user's UPN and primary email address, IE: their _mail_ attribute, should have identical values. If the user's _UPN_ and _mail_ attribues have different values, the script can fallback to the UPN retreived from the registry. This occurance is seen in organizations where they have implemented a .local domain internally, but a .com, .net, .org, etc... domain externally.
+
+**Note:** Since .local domains are invalid in most cloud IdPs (Identity Providers), such as EntraID, Okta, OneLogin, Duo, etc..., further modification of the script will be necessary to omit the _UPN_ and use the user's _mail_ attribute instead.<br><br>
+</details>
+<br>
+
+### Other Important Information
+#### Deployment Requirements
+* The modified version of the script is not intended for kiosk machines, shared machines, or other machines that are used by multiple users. The modified script needs to reliably determine a single user from the registry. If multiple domain users have logged into the machine, any one of those user's identities may be used for the initial device registration process.
+* It is important that the endpoint the script is ran on, have an active connection to the internal directory (On-Premise AD DS) deployment to successfully complete its validations and user attribute searches and mappings. Running the script without an active, working connection to the directory may lead to installation, or CSE device registration failure.
+* For assistance configuring the various variables and script settings to directly configure the CSE application on Windows devices, consult the standard [CSE Documentation](https://docs.banyansecurity.io/docs/manage-users-and-devices/device-managers/distribute-desktopapp/) on this topic.
+
 
 ## Install using Zero Touch Flow
 
