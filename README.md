@@ -10,8 +10,8 @@ See [Banyan documentation](https://docs.banyansecurity.io/docs/feature-guides/ma
 
 This repo contains a modified version of the Vanilla CSE (Cloud Secure Edge | formerly Banyan Security) Installation PowerShell script. Whilst the Vanilla version developed by SonicWall, Inc. is included directly below, the versions of the script within the _device_manager/windows_mod_ directory are intended for deployments where the endpoints are NOT directly joined to EntraID. This refers to Hybrid deployments, where endpoints are: **1** On-Premise AD DS Joined + Intune Managed, or **2** On-Premise AD DS Joined & On-Premise Managed.
 
-* If your organization has a mix of devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_] (device_manager/windows_mod/EntraJoined/banyan-windows-intune_with_AD_search_with-Entra-Join.ps1)
-* If your organziation's endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_] (device_manager/windows_mod/noEntraJoined/banyan-windows-intune_with_AD_search-without-Entra-Join.ps1)
+* If your organization has a mix of devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_](device_manager/windows_mod/EntraJoined/banyan-windows-intune_with_AD_search_with-Entra-Join.ps1)
+* If your organziation's endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_](device_manager/windows_mod/noEntraJoined/banyan-windows-intune_with_AD_search-without-Entra-Join.ps1)
 
 ## Install using Zero Touch Flow
 
