@@ -24,7 +24,7 @@ This repo contains a modified version of the Vanilla CSE (Cloud Secure Edge | fo
 
 <details>
   <summary><strong>What's different between the modified Windows script(s) and the Vanilla script?</strong></summary>
-<br>The original version of the CSE installation script for Windows devices was primarily intended for Intune managed endpoints that are also joined to EntraID. Whilst it is still possible to use that script for endpoints that are not joined to EntraID, as presently written, it will only work if you use the STAGED USER, alternative deployment scenario described in the [CSE%20Documentation](https://docs.banyansecurity.io/docs/manage-users-and-devices/device-managers/distribute-desktopapp/#staged-user-and-zero-touch-installation). This can lead to an undesriable behaviour for some organizations where each of their Windows endpoints known to CSE via the script device registration process are associated to a placeholder user in the CSE Command Center, shown as _Staged User_.
+<br>The original version of the CSE installation script for Windows devices was primarily intended for Intune managed endpoints that are also joined to EntraID. Whilst it is still possible to use that script for endpoints that are not joined to EntraID, as presently written, it will only work if you use the <strong>STAGED USER</strong>, alternative deployment scenario described in the <a href="https://docs.banyansecurity.io/docs/manage-users-and-devices/device-managers/distribute-desktopapp/#staged-user-and-zero-touch-installation">CSE Documentation</a>. This can lead to an undesriable behaviour for some organizations where each of their Windows endpoints known to CSE via the script device registration process are associated to a placeholder user in the CSE Command Center, shown as <em><strong>Staged User</strong></em>.
 
 The modified version of the script remedies this by searching for the user's identity from other sources.<br><br>
 </details>
@@ -45,7 +45,7 @@ The script will both, fetch, and compare the identity retreived from the registr
 * The modified version of the script is not intended for kiosk machines, shared machines, or other machines that are used by multiple users. The modified script needs to reliably determine a single user from the registry. If multiple domain users have logged into the machine, any one of those user's identities may be used for the initial device registration process.
 * It is important that the endpoint the script is ran on, have an active connection to the internal directory (On-Premise AD DS) deployment to successfully complete its validations and user attribute searches and mappings. Running the script without an active, working connection to the directory may lead to installation, or CSE device registration failure.
 * For assistance configuring the various variables and script settings to directly configure the CSE application on Windows devices, consult the standard [CSE Documentation](https://docs.banyansecurity.io/docs/manage-users-and-devices/device-managers/distribute-desktopapp/) on this topic.
-
+<br>
 
 ## Install using Zero Touch Flow
 
