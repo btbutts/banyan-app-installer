@@ -95,7 +95,6 @@ Run the following:
 #>
 Param()
 
-
 # Run as administrator
 
 ################################################################################
@@ -112,10 +111,10 @@ $DEPLOYMENT_KEY = "insert-CSE-Deployment-Key-in-quotes"
 # Check docs for more options and details:
 # https://docs.banyansecurity.io/docs/feature-guides/manage-users-and-devices/device-managers/distribute-desktopapp/#mdm-config-json
 $DEVICE_OWNERSHIP = "C"
-$CA_CERTS_PREINSTALLED = $false
+$CA_CERTS_PREINSTALLED = $true
 $SKIP_CERT_SUPPRESSION = $false
 $IS_MANAGED_DEVICE = $true
-$DEVICE_MANAGER_NAME = "Intune"
+$DEVICE_MANAGER_NAME = "Intune or AD DS"
 $HIDE_SERVICES = $false
 $DISABLE_QUIT = $false
 $START_AT_BOOT = $true
@@ -134,9 +133,83 @@ $ENDPOINT_REPORT_INTERVAL = "7"
 #INTUNE_UDID = $INTUNE_UDID ###Is defined below###
 $TOKEN_NOTIFY = "120"
 
+################################################################################
+# Begin Custom Admin Declarable Variables
+# These settings are used when the device is not Entra ID joined
+# so that the script can still determine the logged in user from
+# the local machine or from AD DS.
 
+# If $preferRegistryUPN is $true, the script will prefer the UPN
+# obtained from the registry over querying AD DS for the UPN
+# However, if you disable this and setup cannot connect to AD DS,
+# then Setup will fail. So only disable this if you are sure there
+# is a valid connection to AD DS, or if you run into issues with
+# the UPN obtained from the registry not being the correct syntax
+$preferRegistryUPN = $true
+
+# Optional: Declare your org's root domain to enable manual UPN construction
+# This may be helpful in situations where the remote endpoint is not connected to
+# the corporate network and cannot query AD DS for user attributes but you still
+# need to install the Banyan app on the user's device.
+# Setup will attempt to populate this variable if it is not admin defined.
+# Example: $UserDC = "example.org"
+$UserDC = "$null" 
+
+# Declare the attribute you are using for your nameID and name (username)
+# Note that these must match the attributes you have defined in your IdP
+# and you should be using the same source attribute 
+# SAML claim assertions in your IdP configuration.
+# Valid options are: "UserPrincipalName" or "mail"
+$SAMLnameID_attribute = "UserPrincipalName"
+
+# End Custom Admin Declarable Variables
 ################################################################################
 
+#Begin SCRIPT Logging
+if (!(Test-Path -Path $env:TEMP\CSE)) {
+    # The folder does not exist, so create it
+    New-Item -Path $env:TEMP\CSE -ItemType Directory | Out-Null
+}
+$LogDateStamp = (Get-Date -Format "yyyyMMMdd_HH_mm_ss").ToUpper()
+Write-Host "Saving to installer log to: $env:TEMP\CSE\BanyanInstaller_$LogDateStamp.log" -ForegroundColor Green
+New-Item -Path "$env:TEMP\CSE\BanyanInstaller_$LogDateStamp.log" -ItemType File -Force | Out-Null
+function ConsoleLog_Out {
+    param (
+        [string[]]$Message,
+        [switch]$LogOnly,
+        [switch]$Blue,
+        [switch]$Cyan,
+        [switch]$Red,
+        [switch]$Yellow,
+        [switch]$Green,
+        [switch]$DarkGray,
+        [switch]$Magenta
+    )
+    if ($Blue) {
+        $Color = "Blue"
+    } elseif ($Cyan) {
+        $Color = "Cyan"
+    } elseif ($Red) {
+        $Color = "Red"
+    } elseif ($Yellow) {
+        $Color = "Yellow"
+    } elseif ($Green) {
+        $Color = "Green"
+    } elseif ($DarkGray) {
+        $Color = "DarkGray"
+    } elseif ($Magenta) {
+        $Color = "Magenta"
+    } else {
+        $Color = "White"
+    }
+    #Output to only Log file
+    if ($LogOnly) {
+        "$Message" | Out-File -FilePath "$env:TEMP\CSE\BanyanInstaller_$LogDateStamp.log" -Append
+    } else {
+        #Output to both Log file and Console
+        "$Message" | Tee-Object -FilePath "$env:TEMP\CSE\BanyanInstaller_$LogDateStamp.log" -Append | Write-Host -ForegroundColor $Color
+    }
+}
 
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (! $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -160,8 +233,13 @@ Write-Host "Installing using deploy key: *****"
 Write-Host "Installing app version: $APP_VERSION"
 
 
-# Original line to query logged in user. (It apparently cannot work on remote users thus we modify with the following...)
+# Original line to query logged in user. (It apparently cannot work on remote users (RDP) thus we modify with the following...)
 $logged_on_user = Get-WMIObject -class Win32_ComputerSystem | Select-Object -expand UserName
+
+# Create note if user is remoted in and the above command does not return user identity
+if (!$logged_on_user) {
+    ConsoleLog_Out -Message "User is remoted into this machine so setup will use alternative means to Identify the user..."
+}
 
 
 ############################################################
@@ -173,12 +251,15 @@ $DisplayName_RegUserName = ""
 $CN_RegUserName = ""
 $UserUPN_RegUserName = ""
 $ADUserAttributes = ""
+$IsSourcedfromREG = ""
 $IsADsourced = ""
 
-# Begin Declarable Variables
-# Uncomment and define as needed
-# Do not leave the following variables un-commented if declared as $null
-#$UserDC = "example.org"
+##############\__________break__________/##############
+
+# Populate Organization DC if not declared by admin
+if (!$UserDC) {
+    $UserDC = (Get-WmiObject -ComputerName localhost -class Win32_ComputerSystem).Domain
+}
 
 function GetUserAttributes {
     # Searches AD DS for user attributes
@@ -207,98 +288,238 @@ function GetUserAttributes {
     }) | Select-Object displayname, name, lastname, firstname, distinguishedname, samaccountname, userprincipalname, mail, proxyaddresses
 }
 
-function DiscoverLoggedonUser {
-    # Obtain user identeties that have logged into local machine
-    $UserSessionRegSource = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\SessionData"
-    $UserSessionRegKey = Get-ChildItem -path $UserSessionRegSource
-    $UserSessionRegKey = $UserSessionRegKey -replace "HKEY_LOCAL_MACHINE","HKLM:"
-    $RegUserSessions = Get-ItemProperty -Path $UserSessionRegKey
-    $RegUserNamesSAM = $RegUserSessions.LoggedOnSAMUser | Sort-Object | Get-Unique
-    # If machine has ever had more than one user log into the machine, then
-    # run further processing to narrow down to just the current active user
-    if ($RegUserNamesSAM.count -gt 1) {
-        # Query current logged-in username and add data to array: $FinalUserArray
-        $UserQueryRaw = query.exe user /server:$env:COMPUTERNAME
-        $UserQueryCSV = $UserQueryRaw.Trim().Replace("  ",",").Replace(", ",",").Replace(" ,",",").Replace(",,,,,",",").Replace(",,,,",",").Replace(",,,",",").Replace(",,",",")
-        $UserCSVArray = $UserQueryCSV -split "`n"
-        # If errors are encountered when determining the logged-in user from query.exe, comment out the line immediately
-        # followling the first break below and uncomment the remaining lines in this DiscoverLoggedinUser function until
-        # you reach the following break:
-        ##############\__________break__________/##############
-        $FinalUserArray = $UserCSVArray | ConvertFrom-Csv -Header "USERNAME","SESSIONNAME","ID","STATE","IDLE_TIME","LOGON_TIME" | Select-Object -Skip 1
-        ##Adjust CSV formatting with extra comma if needed
-        #for ($i=0; $i -lt $UserCSVArray.Length; $i++) {
-        #    # Count the number of commas in the row
-        #    $commaCount = ([regex]::Matches($UserCSVArray[$i], ",")).Count
-        #    # If there are only four commas, replace the first comma with two commas
-        #    if ($commaCount -eq 4) {
-        #        $firstCommaIndex = $UserCSVArray[$i].IndexOf(",")
-        #        $UserCSVArray[$i] = $UserCSVArray[$i].Insert($firstCommaIndex + 1, ",")
-        #    }
-        #}
-        #InitUserArray = $UserCSVArray | ConvertFrom-Csv -Header "USERNAME","SESSIONNAME","ID","STATE","IDLE_TIME","LOGON_TIME"
-        #$FinalUserArray = $InitUserArray | Select-Object -Skip 1
-        ##############\__________break__________/##############
-        $FoundTermSvcUser = $FinalUserArray.USERNAME
-        # Create new array matching user UPN syntax and found user from above query.exe 
-        $MatchedRegUserArray = @()
-        foreach ($RegUser in $RegUserSessions) {
-            if ($RegUser -match "LoggedOnUser=.+\.[A-Za-z]+\\[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9]{1,63}\.){1,125}[A-Za-z]{2,63}" ) {
-                if ($RegUser -match "$FoundTermSvcUser" ) {
-                    $MatchedRegUserArray += $RegUser
+# Function to validate UPN or email syntax
+function CheckUPNsyntax {
+    param (
+        [string]$upn
+    )
+    if ($upn -match "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$") {
+        return $true
+    } else {
+        return $false
+    }
+}
+
+function isADavailable {
+    # Check if there is a valid connection to AD DS
+    # Three tests are included to determine if AD DS is available but
+    # only one needs to pass for the function to return $true
+    # This was added after some organizations reported that the standard
+    # Test-ComputerSecureChannel cmd-let was not returning $true as expected
+    # even though the machine was joined to the domain and could query AD DS
+    $ldapPort = "389"
+    $ldapsPort = "636"
+    $domainController = ($env:LOGONSERVER + "." + $UserDC) -replace "\\", ""
+    $srvRecord = "_ldap._tcp.dc._msdcs.$UserDC"
+    if (Test-ComputerSecureChannel) {
+        ConsoleLog_Out -Message "Standard Test-ComputerSecureChannel test to AD DS succeeded with: $true" -LogOnly
+        return $true
+    } elseif (((Test-NetConnection -ComputerName $domainController -Port $ldapPort -ErrorAction SilentlyContinue).TcpTestSucceeded) -or
+              ((Test-NetConnection -ComputerName $domainController -Port $ldapsPort -ErrorAction SilentlyContinue).TcpTestSucceeded)) {
+        ConsoleLog_Out -Message "TCP network test to AD DS succeeded with: $true" -LogOnly
+        return $true
+    } elseif ($UserDC) {
+        $dnsRecords = Resolve-DnsName -Name $srvRecord -Type SRV -ErrorAction Stop
+        for ($i=0; $i -lt $dnsRecords.count; $i++) {
+            if ($dnsRecords[$i].Name -match $domainController) {
+                ConsoleLog_Out -Message "Two network test methods to AD DS were attempted but were not successful.`nSetup validated with DNS SRV record test to AD DS, which succeeded with: $true`nto server: $($dnsRecords[$i].Name)" -LogOnly
+                return $true
+            }
+        }
+    } else {
+        ConsoleLog_Out -Message "No network tests to AD DS were successful. Setup cannot connect to AD DS." -LogOnly
+        return $false
+    }
+}
+
+
+
+
+# Sub-function: Retrieves users from the registry
+function GetRegistryUsers {
+    $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\SessionData"
+    $regKeys = (Get-ChildItem -Path $regPath) -replace "HKEY_LOCAL_MACHINE","HKLM:"  # Simplify path replacement
+    $users = @()
+
+    foreach ($key in $regKeys) {
+        try {
+            $properties = Get-ItemProperty -Path $key -ErrorAction Stop
+            if ($properties.LoggedOnSAMUser) {
+                $users += [PSCustomObject]@{
+                    DownLevelName = $properties.LoggedOnSAMUser
+                    DisplayName = $properties.LoggedOnDisplayName
+                    LoggedOnUser = $properties.LoggedOnUser  # For UPN matching
                 }
             }
+        } catch {
+            ConsoleLog_Out -Message "Error reading registry key $key`: $_"
         }
-        $script:DownLevel_RegUserName = $MatchedRegUserArray.LoggedOnSAMUser | Get-Unique
-        $script:DisplayName_RegUserName = $MatchedRegUserArray.LoggedOnDisplayName | Get-Unique
-        # Ensure that $MatchedRegUserArray contains UPN format
-        if (($MatchedRegUserArray.LoggedOnUser | Get-Unique) -match "$FoundTermSvcUser") {
-            # Select UPN if contained within array $MatchedRegUserArray
-            $script:UserUPN_RegUserName = ($MatchedRegUserArray.LoggedOnUser | Get-Unique).Split("\")[1]
-            Write-Output "Successfully obtained UPN: `"$UserUPN_RegUserName`" from the registry. Moving on..."
-        } elseif ((($MatchedRegUserArray.LoggedOnUser | Get-Unique) -notmatch "$FoundTermSvcUser") -and (Test-ComputerSecureChannel)) {
-            # Obtain UPN from AD DS if connection to domain is available
-            $script:ADUserAttributes = GetUserAttributes -name $FoundTermSvcUser
-            $script:UserUPN_RegUserName = $ADUserAttributes.UserPrincipalName
-            Write-Output "Setup could not obtain UPN from the registry so `"$UserUPN_RegUserName`" was pulled from AD DS instead. Moving on..."
-            $script:IsADsourced = $true
-        } else {
-            # Format UPN manually as fallback
-            Write-Output "Setup could not obtain UPN from the registry or AD DS as a fallback."
-            Write-Output "This may be because there is no active connection to the directory. Will build UPN manually..."
-            if (!($UserDC)) { $UserDC = (Get-WmiObject Win32_ComputerSystem).Domain }
-            $UserCN = ($MatchedRegUserArray.LoggedOnSAMUser | Get-Unique).Split("\")[1]
-            if ($UserCN -match $FoundTermSvcUser) {
-                $script:UserUPN_RegUserName = $UserCN + "@" + $UserDC
-            } else {
-                $script:UserUPN_RegUserName = $FoundTermSvcUser + "@" + $UserDC
-            }
-            Write-Output "Constructed UPN: `"$UserUPN_RegUserName`" manually. If the matched domain is incorrect for the user,"
-            Write-Output "you can declare the value of `"`$UserDC`" to override this. Continuing..."
-        }
-        Write-Output "Found user: `"$DisplayName_RegUserName`" with existing session in registry path:`n$UserSessionRegSource`nWill run installer as: $DownLevel_RegUserName"
-    } else {
-        $script:DownLevel_RegUserName = $RegUserNamesSAM
-        $script:DisplayName_RegUserName = $RegUserSessions.LoggedOnDisplayName | Sort-Object | Get-Unique
-        $script:UserUPN_RegUserName = ($RegUserSessions.LoggedOnUser | Get-Unique).Split("\")[1]
-        Write-Output "Found single user `"$DisplayName_RegUserName`" from Registry path:`n$UserSessionRegSource`nWill run installer as: $DownLevel_RegUserName..."
     }
-    $script:CN_RegUserName = $DownLevel_RegUserName.Split("\")[1]
-    $script:logged_on_user = $DownLevel_RegUserName
-    $script:IsSourcedfromREG = $true
+
+    return $users | Sort-Object -Property DownLevelName -Unique
+}
+
+# Sub-function: Gets the active user using query.exe
+function GetActiveUser {
+    try {
+        $UserQueryRaw = query.exe user /server:$env:COMPUTERNAME
+        # Simplified parsing: Split into lines and convert to CSV-like format
+        $UserQueryCSV = $UserQueryRaw.Trim().Replace("  ",",").Replace(", ",",").Replace(" ,",",").Replace(",,,,,",",").Replace(",,,,",",").Replace(",,,",",").Replace(",,",",")  # Replace multiple spaces with commas
+        $UserCSVArray = $UserQueryCSV -split "`n" 
+        $userObjects = $UserCSVArray | ConvertFrom-Csv -Header "USERNAME","SESSIONNAME","ID","STATE","IDLE_TIME","LOGON_TIME" | Select-Object -Skip 1
+
+        # Assuming the first active session is the one we want (e.g., not disconnected)
+        $activeSession = $userObjects | Where-Object { $_.STATE -notlike "*Disc*" } | Select-Object -First 1
+        return $activeSession.USERNAME
+    } catch {
+        ConsoleLog_Out -Message "Error querying active user: $_"
+        return $null
+    }
+}
+
+# Sub-function: Matches the active user to registry data
+function MatchUserToRegistry {
+    param (
+        [array]$registryUsers,
+        [string]$activeUser
+    )
+
+    foreach ($user in $registryUsers) {
+        if ($user.DownLevelName -like "*$activeUser*" -or $user.LoggedOnUser -like "*$activeUser*") {
+            return $user  # Return the first match
+        }
+    }
+    return $null  # No match found
+}
+
+# Sub-function: Resolves the UPN, handling validation and fallbacks
+function ResolveUPN {
+    param (
+        [PSCustomObject]$userDetails,  # Object from registry with user attributes properties
+        [string]$activeUser,           # Active user from query.exe (if applicable)
+        [string]$userDC                # Optional domain override
+    )
+
+    $upnCandidate = $null
+
+    # Determine UPN attribute candidate
+    if ($userDetails -and $userDetails.LoggedOnUser) {
+        $upnCandidate = $userDetails.LoggedOnUser.Split("\")[1]  # Extract potential UPN
+    } elseif ($activeUser) {
+        $upnCandidate = $activeUser  # Fallback to active user
+    }
+
+    if ((CheckUPNsyntax -upn $upnCandidate) -and ($preferRegistryUPN -eq $true)) {
+        ConsoleLog_Out -Message "Retrieved valid $SAMLnameID_attribute attribute from registry: `"$upnCandidate`" has valid syntax. Setup will use this value!"
+        $script:IsADsourced = $false
+        $script:IsSourcedfromREG = $true
+        return $upnCandidate
+    }
+
+    if (isADavailable) {
+
+        # Legacy PowerShell
+        if ($activeUser) {
+            $AD_QueryUser = $activeUser
+        } else {
+            $AD_QueryUser = $userDetails.DownLevelName.Split("\")[1]
+        }
+
+        # For future use!
+        # Ternary operators are only supported starting PowerShell 7
+        #$adUserAttributes = GetUserAttributes -name ($activeUser ? $activeUser : $userDetails.DownLevelName.Split("\")[1])
+        
+        # Create alternative log depending on admin preference of UPN source
+        if ($preferRegistryUPN -eq $false) {
+            ConsoleLog_Out -Message "Admin has chosen not to use $SAMLnameID_attribute attribute from registry so setup will query AD DS for user attributes using active session username `"$AD_QueryUser`"..."
+        } else {
+            ConsoleLog_Out -Message "UPN attribute retrieved from registry has invalid format so querying AD DS for user attributes using active session username `"$AD_QueryUser`"..."
+        }
+        $adUserAttributes = GetUserAttributes -name $AD_QueryUser
+        $samlNameIdentifier = $adUserAttributes.$SAMLnameID_attribute
+        $script:IsADsourced = $true
+        $script:IsSourcedfromREG = $false
+        ConsoleLog_Out -Message "Retrieved $SAMLnameID_attribute attribute from AD DS: `"$samlNameIdentifier`". Setup will use this value!"
+        return $samlNameIdentifier
+    } else {
+
+        # Create alternative log depending on admin preference of UPN source
+        if ($preferRegistryUPN -eq $false) {
+            ConsoleLog_Out -Message "Admin has chosen not to use UPN attribute from registry but Setup cannot connect to AD DS.`nConstructing $SAMLnameID_attribute attribute manually anyways..."
+        } else {
+            ConsoleLog_Out -Message "UPN attribute retrieved from registry has invalid format and AD DS is not available.`nConstructing $SAMLnameID_attribute attribute manually..."
+        }
+        ConsoleLog_Out -Message "Using host's domain: `"$UserDC`" for UPN construction!"
+
+        # For future use!
+        # Ternary operators are only supported starting PowerShell 7
+        #$cn = $activeUser ? $activeUser : ($userDetails.DownLevelName.Split("\")[1])
+
+        # Legacy PowerShell
+        $cn = if ($activeUser) { $activeUser } else { $userDetails.DownLevelName.Split("\")[1] }
+        $constructedUPN = "$cn" + "@" + "$UserDC"
+        $script:IsADsourced = $false
+        $script:IsSourcedfromREG = $true
+        ConsoleLog_Out -Message "Constructed $SAMLnameID_attribute attribute: `"$constructedUPN`""
+        return $constructedUPN
+    }
+}
+
+
+# Main function: Orchestrates the discovery process
+function DiscoverLoggedonUser {
+    param ()
+        #[string]$UserDC  # Optional parameter to override the domain for UPN construction
+    #)
+
+    ConsoleLog_Out -Message "Attempting to locate user from registry: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\SessionData"
+
+    # Step 1: Get users from registry
+    $registryUsers = GetRegistryUsers
+
+    if ($registryUsers.Count -ge 1) {
+        ConsoleLog_Out -Message "Multiple users discovered. Setup will attempt to determine the active user..."
+        $activeUser = GetActiveUser
+        ConsoleLog_Out -Message "Identified active username: `"$activeUser`" from query.exe on this host"
+        
+        # Match active user to registry data
+        $matchedUser = MatchUserToRegistry -registryUsers $registryUsers -activeUser $activeUser
+        
+        if ($matchedUser) {
+            ConsoleLog_Out -Message "Setup successfully matched user: `"$($matchedUser.DisplayName)`" from the registry with the active session."
+            $script:DownLevel_RegUserName = $matchedUser.DownLevelName
+            $script:DisplayName_RegUserName = $matchedUser.DisplayName
+            $script:UserUPN_RegUserName = ResolveUPN -userDetails $matchedUser -activeUser $activeUser -userDC $UserDC
+        } else {
+            ConsoleLog_Out -Message "No matching user found in registry for active user. Falling back to manual $SAMLnameID_attribute attribute construction."
+            $script:UserUPN_RegUserName = ResolveUPN -userDetails $null -activeUser $activeUser -userDC $UserDC
+            $script:DownLevel_RegUserName = "$env:USERDOMAIN" + "\" + "$activeUser"
+            $script:DisplayName_RegUserName = $activeUser  # Fallback; could be improved with more queries
+        }
+    } else {
+        ConsoleLog_Out -Message "Only one user discovered in registry so setup will use that user for installation."
+        $userDetails = $registryUsers[0]  # Get the single user retrieved from registry
+        $script:DownLevel_RegUserName = $userDetails.DownLevelName
+        $script:DisplayName_RegUserName = $userDetails.DisplayName
+        $script:UserUPN_RegUserName = ResolveUPN -userDetails $userDetails -activeUser $null -userDC $UserDC
+    }
+
+    $script:CN_RegUserName = $script:DownLevel_RegUserName.Split("\")[1]
+    $script:logged_on_user = $script:DownLevel_RegUserName
+
+    ConsoleLog_Out -Message "Final user details are:`nDisplayName = $script:DisplayName_RegUserName`nDownlevel Name = $script:DownLevel_RegUserName`n$SAMLnameID_attribute = $script:UserUPN_RegUserName"
 }
 
 
 # Backup user identification if script is run on a remote machine in which Get-WMIObject cannot define
-# Will query AD for mssing user domain attributes
-if (!$logged_on_user) {
+# Also runs to determine user attributes on non-Entra ID joined machines
+if ((!($logged_on_user)) -or (!($IsSourcedfromREG)) -or (!($IsADsourced))) {
     #$DownLevel_RegUserName = ""
     #$DisplayName_RegUserName = ""
     #$UserUPN_RegUserName = ""
     #$CN_RegUserName = ""
     $logged_on_user = ""
     $IsSourcedfromREG = ""
-    Write-Output "User is remoted into this machine so verifying logged in user against registry session cache..."
     DiscoverLoggedonUser
 }
 
@@ -349,34 +570,34 @@ function get_user_email() {
             # By default, the user's Mail attribute is selected for their CSE login email address.
             # You can comment that line and uncomment the following line such that the user's UPN
             # is selected for their CSE login email address
-            Write-Output "Machine is not joined to Entra ID so sourcing user mail attribute from AD DS!`n"
-            $script:MY_EMAIL = $ADUserAttributes.Mail
+            ConsoleLog_Out -Message "Machine is not joined to Entra ID so sourcing user mail attribute from AD DS!`n"
+            $script:MY_EMAIL = $ADUserAttributes.$SAMLnameID_attribute
             #$script:MY_EMAIL = $ADUserAttributes.UserPrincipalName
-            $script:MY_USER = $DisplayName_RegUserName
-        } elseif (($IsSourcedfromREG -eq $true) -and (Test-ComputerSecureChannel)) {
+            $script:MY_USER = $ADUserAttributes.DisplayName
+        } elseif (($IsSourcedfromREG -eq $true) -and (isADavailable)) {
             # Note that this block activates if user is remoted into their machine AND
             # if the Machine has a valid connection to AD DS. Attributes are pulled from
             # AD DS in case the user's mail attributes differ from their login UPN.
             # You may change this by swapping the $MY_EMAIL variable below
-            Write-Output "Machine is not joined to Entra ID so sourcing user info from AD DS and registry session cache!`n"
+            ConsoleLog_Out -Message "Machine is not joined to Entra ID so sourcing user info from AD DS and registry session cache!`n"
             $ADUserAttributes = GetUserAttributes -name $CN_RegUserName
-            $script:MY_EMAIL = $ADUserAttributes.Mail
+            $script:MY_EMAIL = $ADUserAttributes.$SAMLnameID_attribute
             #$script:MY_EMAIL = $ADUserAttributes.UserPrincipalName
             $script:MY_USER = $DisplayName_RegUserName
         } else {
             # This code block will grab user attributes purely from the local registry
             # Note that this could cause innacuracies in some environments if the user's
             # mail attribute differs from their UPN attribute
-            Write-Output "Machine is not Entra ID joined and does not have valid AD DS connection.`nPulling user attributes from localhost only!"
-            DiscoverLoggedonUser
+            ConsoleLog_Out -Message "Machine is not Entra ID joined and does not have valid AD DS connection.`nPulling user attributes from localhost only!"
+            #DiscoverLoggedonUser
             $script:MY_USER = $DisplayName_RegUserName
             $script:MY_EMAIL = $UserUPN_RegUserName
         }
     }
-    Write-Host "Installing for user with name: $MY_USER"
-    Write-Host "Installing for user with email: $MY_EMAIL"
+    ConsoleLog_Out -Message "Installing for user with name: $MY_USER"
+    ConsoleLog_Out -Message "Installing for user with email: $MY_EMAIL"
     if (!$MY_EMAIL) {
-        Write-Host "No user specified - device certificate will be issued to the default **STAGED USER**"
+        ConsoleLog_Out -Message "No user specified - device certificate will be issued to the default **STAGED USER**"
     }
 }
 ############################################################
@@ -538,3 +759,4 @@ if (($INVITE_CODE -eq "upgrade") -and ($DEPLOYMENT_KEY -eq "upgrade")) {
     allow_app
     start_app
 }
+
