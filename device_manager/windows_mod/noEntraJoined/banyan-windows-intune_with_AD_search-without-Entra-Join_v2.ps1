@@ -121,6 +121,7 @@ $START_AT_BOOT = $true
 $AUTO_LOGIN = $true
 $HIDE_ON_START = $true
 $DISABLE_AUTO_UPDATE = $false
+$ALLOW_MULTIORG = $false
 
 # User Information for Device Certificate
 $MULTI_USER = $false
@@ -654,6 +655,7 @@ function create_config() {
         mdm_disable_auto_update = $DISABLE_AUTO_UPDATE
         mdm_reporting_interval = $ENDPOINT_REPORT_INTERVAL
         mdm_login_token_prompt_time = $TOKEN_NOTIFY
+        mdm_multi_org = $ALLOW_MULTIORG
 
     } | ConvertTo-Json
 
