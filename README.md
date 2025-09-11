@@ -15,8 +15,8 @@ This repo contains a modified version of the Vanilla CSE (Cloud Secure Edge | fo
 
 ### Script Selection
 
-* If your organization has a mix of Windows devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_](device_manager/windows_mod/EntraJoined/banyan-windows-intune_with_AD_search_with-Entra-Join.ps1)
-* If your organziation's Windows endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_](device_manager/windows_mod/noEntraJoined/banyan-windows-intune_with_AD_search-without-Entra-Join.ps1)
+* If your organization has a mix of Windows devices that are both directly EntraID joined, and On-Premise AD DS joined, use the script found in [_device_manager/windows_mod/EntraJoined_](device_manager/windows_mod/EntraJoined/)
+* If your organziation's Windows endpoints are NOT at all directly joined to EntraID, use the script found in [_device_manager/windows_mod/noEntraJoined_](device_manager/windows_mod/noEntraJoined/)
 
 <br>
 
