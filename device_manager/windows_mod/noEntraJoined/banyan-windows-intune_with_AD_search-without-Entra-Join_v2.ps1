@@ -68,11 +68,11 @@ This script does not require any Third-Party software to function.
 
 .SYNOPSIS
 The script adhere's to the original developer's sequence for obtaining the necessary
-logged-in user's attributes from the local machine, using a specific Entra ID registry key and the
-'Get-WMIObject' cmd-let. However, this does not work for all environments for a number of reasons.
-The new modifications allow this script to work in many other environment configurations
-If the local logged-in user is not Entra joined, the script will query the registry's session cache
-for all previous users that have ever logged into the local machine.
+logged-in user's attributes from the local machine, using a specific Entra ID (EntraID environments
+only) registry key and the 'Get-WMIObject' cmd-let. However, this does not work for all environments 
+for a number of reasons. The new modifications allow this script to work in many other environment 
+configurations. If the local logged-in user is not Entra joined, the script will query the registry's 
+session cache for all previous users that have ever logged into the local machine.
 • If there is just one user found, then that is automatically the selected user for the CSE install
   script, and the local user's DN, UPN, and DisplayName attributes are pulled from that registry key.
 • If there are more than one historical users, the logged in user (including now for terminal services
@@ -81,9 +81,13 @@ for all previous users that have ever logged into the local machine.
   the active user's DN, UPN, and DisplayName.
 • If the active user's attributes had to be pulled from the local registry's session cache, rather than
   the Entra ID join reg keys, then the script will query AD DS for the user's Mail attribute to use that,
-  preferably, for the user's email address, in case that attribute differs from the local, active user's UPN.
+  preferably, for the user's email address (or UPN), in case that attribute differs from the local, active 
+  user's UPN.
 • If AD DS is not available, the script will default to the UPN for the email. Though that is not always
   preferable, it is the fallback option.
+• You may set the variable `$preferRegistryUPN` if you'd like the script to prefer constructing the user
+  UPN from the local registry. However, during the final checks prior to installing the Banyan app, the
+  script will still check with AD DS if it is available.
 
 .EXAMPLE
 The script should be run from an elevated PowerShell.
@@ -143,10 +147,15 @@ $TOKEN_NOTIFY = "120"
 # If $preferRegistryUPN is $true, the script will prefer the UPN
 # obtained from the registry over querying AD DS for the UPN
 # However, if you disable this and setup cannot connect to AD DS,
-# then Setup will fail. So only disable this if you are sure there
+# then Setup can fail. So only enable this if you are sure there
 # is a valid connection to AD DS, or if you run into issues with
 # the UPN obtained from the registry not being the correct syntax
-$preferRegistryUPN = $true
+$preferRegistryUPN = $false
+
+# If $NoADReference is set to true, setup will disable AD Lookup
+# and rely on locally constructed UPN
+# This is NOT reccomended for most environments!
+$NoADReference = $false
 
 # Optional: Declare your org's root domain to enable manual UPN construction
 # This may be helpful in situations where the remote endpoint is not connected to
@@ -432,7 +441,7 @@ function ResolveUPN {
         
         # Create alternative log depending on admin preference of UPN source
         if ($preferRegistryUPN -eq $false) {
-            ConsoleLog_Out -Message "Admin has chosen not to use $SAMLnameID_attribute attribute from registry so setup will query AD DS for user attributes using active session username `"$AD_QueryUser`"..."
+            ConsoleLog_Out -Message "Admin has chosen not to use $SAMLnameID_attribute attribute from registry so setup will`nquery AD DS for user attributes using active session username `"$AD_QueryUser`"..."
         } else {
             ConsoleLog_Out -Message "UPN attribute retrieved from registry has invalid format so querying AD DS for user attributes using active session username `"$AD_QueryUser`"..."
         }
@@ -478,7 +487,7 @@ function DiscoverLoggedonUser {
     # Step 1: Get users from registry
     $registryUsers = GetRegistryUsers
 
-    if ($registryUsers.Count -ge 1) {
+    if ($registryUsers.Count -gt 1) {
         ConsoleLog_Out -Message "Multiple users discovered. Setup will attempt to determine the active user..."
         $activeUser = GetActiveUser
         ConsoleLog_Out -Message "Identified active username: `"$activeUser`" from query.exe on this host"
@@ -568,13 +577,19 @@ function get_user_email() {
         #} elseif ($IsADsourced -eq $true) {
         
         if ($IsADsourced -eq $true) {
-            # By default, the user's Mail attribute is selected for their CSE login email address.
+            # By default, the user's UPN attribute is selected for their CSE login email address.
             # You can comment that line and uncomment the following line such that the user's UPN
             # is selected for their CSE login email address
             ConsoleLog_Out -Message "Machine is not joined to Entra ID so sourcing user mail attribute from AD DS!`n"
-            $script:MY_EMAIL = $ADUserAttributes.$SAMLnameID_attribute
+            $script:MY_EMAIL = $UserUPN_RegUserName
             #$script:MY_EMAIL = $ADUserAttributes.UserPrincipalName
-            $script:MY_USER = $ADUserAttributes.DisplayName
+            $script:MY_USER = $DisplayName_RegUserName
+        } elseif (($preferRegistryUPN -eq $true) -and ($IsSourcedfromREG -eq $true) -and ($NoADReference -eq $true)) {
+            # This block is only intended to be executed if the admin has chosen to prefer
+            # using the locally constructed UPN from the user's machine.
+            ConsoleLog_Out -Message "Admin has chosen to source user attributes from local machine's registry session cache only!"
+            $script:MY_EMAIL = $UserUPN_RegUserName
+            $script:MY_USER = $DisplayName_RegUserName
         } elseif (($IsSourcedfromREG -eq $true) -and (isADavailable)) {
             # Note that this block activates if user is remoted into their machine AND
             # if the Machine has a valid connection to AD DS. Attributes are pulled from
