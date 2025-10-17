@@ -329,7 +329,7 @@ function isADavailable {
         ConsoleLog_Out -Message "TCP network test to AD DS succeeded with: $true" -LogOnly
         return $true
     } elseif ($UserDC) {
-        $dnsRecords = Resolve-DnsName -Name $srvRecord -Type SRV -ErrorAction Stop
+        $dnsRecords = Resolve-DnsName -Name $srvRecord -Type SRV -ErrorAction SilentlyContinue
         for ($i=0; $i -lt $dnsRecords.count; $i++) {
             if ($dnsRecords[$i].Name -match $domainController) {
                 ConsoleLog_Out -Message "Two network test methods to AD DS were attempted but were not successful.`nSetup validated with DNS SRV record test to AD DS, which succeeded with: $true`nto server: $($dnsRecords[$i].Name)" -LogOnly
